@@ -2,7 +2,6 @@ use crate::interpreter::Interpreter;
 use crate::rom::Rom;
 use std::{env, thread, time::Duration};
 
-mod display;
 mod interpreter;
 mod rom;
 
@@ -11,7 +10,7 @@ fn main() {
     let file_path = &args[1];
 
     let rom = Rom::new(file_path);
-    let chip8 = Interpreter::new().load_rom(rom);
+    // let chip8 = Interpreter::new().load_rom(rom);
 
     loop {
         // Fetch stage:
