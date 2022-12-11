@@ -1,7 +1,7 @@
-use crate::{keyboard::KbdHandler, rom::Rom};
+use crate::{graphics::DisplayHandler, keyboard::KbdHandler, rom::Rom};
 
 extern crate sdl2;
-use sdl2::Sdl;
+use sdl2::{render::Canvas, video::Window, Sdl};
 
 extern crate rand;
 use rand::Rng;
@@ -37,10 +37,10 @@ const FONTS_PER_CHAR: usize = 5;
 const SPRITE_WIDTH_BITES: usize = 8;
 
 /// Original CHIP-8 screen width available for display.
-const DISPLAY_WIDTH: usize = 64;
+pub const DISPLAY_WIDTH: usize = 64;
 
 /// Original CHIP-8 screen height available for display.
-const DISPLAY_HEIGHT: usize = 32;
+pub const DISPLAY_HEIGHT: usize = 32;
 
 /// Types of possible actions with the program counter after opcode execution.
 enum PCUpdate {
@@ -109,12 +109,18 @@ pub struct Interpreter {
     display: [[u8; DISPLAY_WIDTH]; DISPLAY_HEIGHT],
 
     /// Interpreter handler for keyboard input.
-    kbdhandler: KbdHandler,
+    kbd_handler: KbdHandler,
+
+    /// Interpreter display handler.
+    display_handler: DisplayHandler,
 }
 
+// -----------------------------------------------------------------------------
+//   - Initialization setup methods  -
+// -----------------------------------------------------------------------------
 impl Interpreter {
     /// Creates a new CHIP-8 intepreter
-    pub fn new(contex: Sdl) -> Self {
+    pub fn new(contex: &Sdl, canvas: Canvas<Window>) -> Self {
         // Load font set to memory
         let mut memory = [0u8; MEMORY_SIZE];
         memory[..80].copy_from_slice(&FONTS[..80]);
@@ -130,7 +136,8 @@ impl Interpreter {
             sound_timer: 0,
             keypad: [false; 16],
             display: [[0u8; DISPLAY_WIDTH]; DISPLAY_HEIGHT],
-            kbdhandler: KbdHandler::new(contex),
+            kbd_handler: KbdHandler::new(contex),
+            display_handler: DisplayHandler::new(canvas),
         }
     }
 
@@ -157,49 +164,25 @@ impl Interpreter {
         }
     }
 
-    pub fn clear_rom_memory(&mut self) {
-        for addr in 0x200..MEMORY_SIZE {
-            self.memory[addr] = 0;
-        }
+    /// Initialize the interpreter by executing the opcode at `0x200`.
+    pub fn init(&mut self) {
+        self.execute(self.current_opcode());
     }
+}
 
-    /// Returns the current instruction the `program_counter` is pointing
-    /// at. This instruction consists of a single `u16` which is obtained by
-    /// merging the `u8` located at the pointing address and the `u8` next to
-    /// it.
-    pub fn current_opcode(&self) -> u16 {
-        ((self.memory[self.program_counter] as u16) << 8)
-            | (self.memory[self.program_counter + 1] as u16)
-    }
-
-    /// Updates the program counter according to the given enum type
-    /// `PCUpdate`.
-    fn update_pc(&mut self, updater: PCUpdate) {
-        match updater {
-            PCUpdate::Next => self.program_counter += 2,
-            PCUpdate::SkipNext => self.program_counter += 4,
-            PCUpdate::JumpTo(addr) => self.program_counter = addr,
-        }
-    }
-
-    /// If the `condition` passes, sets the flag `vregister[0xf]` to `1`,
-    /// otherwise the flag is set to `0`.
-    fn up_flag_if(&mut self, condition: bool) {
-        if condition {
-            self.vregister[0xf] = 1;
-        } else {
-            self.vregister[0xf] = 0;
-        }
-    }
-
-    /// Erases all pixels from the display screen, set all to zero.
-    fn clear_display(&mut self) {
-        self.display = [[0u8; DISPLAY_WIDTH]; DISPLAY_HEIGHT];
+// -----------------------------------------------------------------------------
+//   - Intepreter execution -
+// -----------------------------------------------------------------------------
+impl Interpreter {
+    // Main loop of execution
+    pub fn run(&mut self) {
+        todo!();
+        // thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
     }
 
     /// Given an `upcode`, the interpreter executes a single cycle of the
     /// instruction.
-    pub fn execute(&mut self, opcode: u16) {
+    fn execute(&mut self, opcode: u16) {
         // `nnn`: opcode address
         let nnn = (opcode & 0x0fff) as usize;
 
@@ -269,7 +252,55 @@ impl Interpreter {
     }
 }
 
-// Implementation of all instructions
+// -----------------------------------------------------------------------------
+//   - Collection of auxiliary methods -
+// -----------------------------------------------------------------------------
+impl Interpreter {
+    /// Clear the interpreter memory starting at `0x200`.
+    pub fn clear_rom_memory(&mut self) {
+        for addr in 0x200..MEMORY_SIZE {
+            self.memory[addr] = 0;
+        }
+    }
+
+    /// Returns the current instruction the `program_counter` is pointing
+    /// at. This instruction consists of a single `u16` which is obtained by
+    /// merging the `u8` located at the pointing address and the `u8` next to
+    /// it.
+    pub fn current_opcode(&self) -> u16 {
+        ((self.memory[self.program_counter] as u16) << 8)
+            | (self.memory[self.program_counter + 1] as u16)
+    }
+
+    /// Updates the program counter according to the given enum type
+    /// `PCUpdate`.
+    fn update_pc(&mut self, updater: PCUpdate) {
+        match updater {
+            PCUpdate::Next => self.program_counter += 2,
+            PCUpdate::SkipNext => self.program_counter += 4,
+            PCUpdate::JumpTo(addr) => self.program_counter = addr,
+        }
+    }
+
+    /// If the `condition` passes, sets the flag `vregister[0xf]` to `1`,
+    /// otherwise the flag is set to `0`.
+    fn up_flag_if(&mut self, condition: bool) {
+        if condition {
+            self.vregister[0xf] = 1;
+        } else {
+            self.vregister[0xf] = 0;
+        }
+    }
+
+    /// Erases all pixels from the display screen, set all to zero.
+    fn clear_display(&mut self) {
+        self.display = [[0u8; DISPLAY_WIDTH]; DISPLAY_HEIGHT];
+    }
+}
+
+// -----------------------------------------------------------------------------
+//   - Implementation of all opcodes -
+// -----------------------------------------------------------------------------
 impl Interpreter {
     /// CLS: clear the display.
     fn op_00e0(&mut self) {
@@ -528,7 +559,7 @@ impl Interpreter {
     /// All execution stops until a key is pressed, then the value of that key
     /// is stored in Vx.
     fn op_fx0a(&mut self, x: usize) {
-        self.vregister[x] = self.kbdhandler.wait_valid_key(x);
+        self.vregister[x] = self.kbd_handler.wait_valid_key(x);
         self.update_pc(PCUpdate::Next);
     }
 

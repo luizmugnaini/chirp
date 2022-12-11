@@ -43,7 +43,7 @@ pub struct KbdHandler {
 
 impl KbdHandler {
     /// Creates a new keyboard handler given an SDL `context`.
-    pub fn new(context: Sdl) -> Self {
+    pub fn new(context: &Sdl) -> Self {
         KbdHandler {
             event_pump: context.event_pump().unwrap(),
             state: KbdHandlerState::Free,
