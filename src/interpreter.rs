@@ -1,4 +1,7 @@
-use crate::rom::Rom;
+use crate::{keyboard::KbdHandler, rom::Rom};
+
+extern crate sdl2;
+use sdl2::Sdl;
 
 extern crate rand;
 use rand::Rng;
@@ -27,22 +30,30 @@ const FONTS: [u8; 80] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
 
+/// Number of fonts used per character.
 const FONTS_PER_CHAR: usize = 5;
+
+/// Sprite width measured in bites.
 const SPRITE_WIDTH_BITES: usize = 8;
 
+/// Original CHIP-8 screen width available for display.
 const DISPLAY_WIDTH: usize = 64;
+
+/// Original CHIP-8 screen height available for display.
 const DISPLAY_HEIGHT: usize = 32;
 
-// const KEYPAD: [&str; 16] = [
-//     "1", "2", "3", "4", // 1
-//     "q", "w", "e", "r", // 2
-//     "a", "s", "d", "f", // 3
-//     "z", "x", "c", "v", // 4
-// ];
-
+/// Types of possible actions with the program counter after opcode execution.
 enum PCUpdate {
+    /// Update the program counter to the next opcode in memory, that is,
+    /// increment it by 2.
     Next,
+
+    /// The update should move the program counter so that it skips the next
+    /// opcode in memory. For that, we increment the program counter by 4.
     SkipNext,
+
+    /// Given an adress (specified by the opcode), assign the program counter
+    /// to this adress.
     JumpTo(usize),
 }
 
@@ -96,10 +107,14 @@ pub struct Interpreter {
 
     /// Display screen containing the fonts
     display: [[u8; DISPLAY_WIDTH]; DISPLAY_HEIGHT],
+
+    /// Interpreter handler for keyboard input.
+    kbdhandler: KbdHandler,
 }
 
 impl Interpreter {
-    pub fn new() -> Self {
+    /// Creates a new CHIP-8 intepreter
+    pub fn new(contex: Sdl) -> Self {
         // Load font set to memory
         let mut memory = [0u8; MEMORY_SIZE];
         memory[..80].copy_from_slice(&FONTS[..80]);
@@ -115,6 +130,7 @@ impl Interpreter {
             sound_timer: 0,
             keypad: [false; 16],
             display: [[0u8; DISPLAY_WIDTH]; DISPLAY_HEIGHT],
+            kbdhandler: KbdHandler::new(contex),
         }
     }
 
@@ -156,7 +172,8 @@ impl Interpreter {
             | (self.memory[self.program_counter + 1] as u16)
     }
 
-    // Update according to the result of the last instruction
+    /// Updates the program counter according to the given enum type
+    /// `PCUpdate`.
     fn update_pc(&mut self, updater: PCUpdate) {
         match updater {
             PCUpdate::Next => self.program_counter += 2,
@@ -175,6 +192,7 @@ impl Interpreter {
         }
     }
 
+    /// Erases all pixels from the display screen, set all to zero.
     fn clear_display(&mut self) {
         self.display = [[0u8; DISPLAY_WIDTH]; DISPLAY_HEIGHT];
     }
@@ -249,7 +267,10 @@ impl Interpreter {
             }
         }
     }
+}
 
+// Implementation of all instructions
+impl Interpreter {
     /// CLS: clear the display.
     fn op_00e0(&mut self) {
         self.clear_display();
@@ -507,7 +528,8 @@ impl Interpreter {
     /// All execution stops until a key is pressed, then the value of that key
     /// is stored in Vx.
     fn op_fx0a(&mut self, x: usize) {
-        todo!();
+        self.vregister[x] = self.kbdhandler.wait_valid_key(x);
+        self.update_pc(PCUpdate::Next);
     }
 
     /// LD DT, Vx: set delay timer = Vx.
@@ -555,7 +577,7 @@ impl Interpreter {
         self.update_pc(PCUpdate::Next);
     }
 
-    /// LD [I], Vx:
+    /// LD I, Vx:
     /// Store registers V0 through Vx in memory starting at location I.
     ///
     /// The interpreter copies the values of registers V0 through Vx into
@@ -566,7 +588,7 @@ impl Interpreter {
         self.update_pc(PCUpdate::Next);
     }
 
-    /// LD Vx, [I]:
+    /// LD Vx, I:
     /// Read registers V0 through Vx from memory starting at location I.
     ///
     /// The interpreter reads values from memory starting at location I into

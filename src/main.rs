@@ -3,6 +3,7 @@ use crate::rom::Rom;
 use std::{env, thread, time::Duration};
 
 mod interpreter;
+mod keyboard;
 mod rom;
 
 fn main() {
