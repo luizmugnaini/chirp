@@ -1,4 +1,10 @@
-use crate::{graphics::DisplayHandler, keyboard::KbdHandler, rom::Rom};
+use std::{thread, time::Duration};
+
+use crate::{
+    graphics::DisplayHandler,
+    keyboard::{KbdHandler, KbdHandlerState},
+    rom::Rom,
+};
 
 extern crate sdl2;
 use sdl2::{render::Canvas, video::Window, Sdl};
@@ -145,28 +151,11 @@ impl Interpreter {
     pub fn load_rom(&mut self, rom: Rom) {
         // Check if the program counter is set to the initial address,
         // otherwise the memory can be already in used by a different
-        // ROM
+        // ROM.
         if self.program_counter != 0x200 {
             self.clear_rom_memory();
         }
-
-        // TODO other problems may arise: what if someone loads a rom then
-        // loads another without changing the program counter? Will
-        // that be an actual problem or we can simply ignore it by
-        // mitigating the possibility of accessing unwanted memory?
-
-        // Load ROM into memory
-        for (idx, &x) in rom.get_data().iter().enumerate() {
-            let mem_pos = 0x200 + idx;
-            if mem_pos < MEMORY_SIZE {
-                self.memory[mem_pos] = x;
-            }
-        }
-    }
-
-    /// Initialize the interpreter by executing the opcode at `0x200`.
-    pub fn init(&mut self) {
-        self.execute(self.current_opcode());
+        self.memory[0x200..].copy_from_slice(&rom.get_data());
     }
 }
 
@@ -176,8 +165,45 @@ impl Interpreter {
 impl Interpreter {
     // Main loop of execution
     pub fn run(&mut self) {
-        todo!();
-        // thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
+        'running: loop {
+            // Setup the display.
+            self.display_handler.draw_to_canvas(&self.display);
+            self.display_handler.show();
+
+            'waiting_kbd_input: loop {
+                eprintln!("Waiting for key");
+                match self.kbd_handler.poll_keypad() {
+                    Ok(k) => self.keypad = k,
+                    Err(()) => break 'running,
+                }
+
+                match self.kbd_handler.state() {
+                    KbdHandlerState::Waiting(x) => {
+                        // Check if some key got pressed and, if so, store its
+                        // value into the regiter Vx.
+                        if let Some(key_idx) = self.keypad.iter().position(|&b| b) {
+                            self.vregister[x] = key_idx as u8;
+                            break 'waiting_kbd_input;
+                        }
+                    }
+                    KbdHandlerState::Free => break 'waiting_kbd_input,
+                }
+            }
+            eprintln!("executing");
+            self.execute(self.current_opcode());
+
+            // Handling timers.
+            if self.delay_timer > 0 {
+                self.delay_timer -= 1;
+            }
+            if self.sound_timer > 0 {
+                // TODO: beep
+                self.sound_timer -= 1;
+            }
+
+            thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
+        }
+        eprintln!("Stopping execution");
     }
 
     /// Given an `upcode`, the interpreter executes a single cycle of the
@@ -230,24 +256,18 @@ impl Interpreter {
             [0x0b, _, _, _] => self.op_bnnn(nnn),
             [0x0c, _, _, _] => self.op_cxkk(x, kk),
             [0x0d, _, _, _] => self.op_dxyn(x, y, n),
-            [0x0e, _, 0x09, 0xe] => self.op_ex9e(x),
-            [0x0e, _, 0x0a, 0x1] => self.op_exa1(x),
-            [0x0f, _, 0x00, 0x7] => self.op_fx07(x),
-            [0x0f, _, 0x00, 0xa] => self.op_fx0a(x),
-            [0x0f, _, 0x01, 0x5] => self.op_fx15(x),
-            [0x0f, _, 0x01, 0x8] => self.op_fx18(x),
-            [0x0f, _, 0x01, 0xe] => self.op_fx1e(x),
-            [0x0f, _, 0x02, 0x9] => self.op_fx29(x),
-            [0x0f, _, 0x03, 0x3] => self.op_fx33(x),
-            [0x0f, _, 0x05, 0x5] => self.op_fx55(x),
-            [0x0f, _, 0x06, 0x5] => self.op_fx65(x),
-            op => {
-                eprintln!(
-                    "Opcode will be skipped because it is unavailable: {:?}",
-                    op
-                );
-                self.update_pc(PCUpdate::Next);
-            }
+            [0x0e, _, 0x09, 0x0e] => self.op_ex9e(x),
+            [0x0e, _, 0x0a, 0x01] => self.op_exa1(x),
+            [0x0f, _, 0x00, 0x07] => self.op_fx07(x),
+            [0x0f, _, 0x00, 0x0a] => self.op_fx0a(x),
+            [0x0f, _, 0x01, 0x05] => self.op_fx15(x),
+            [0x0f, _, 0x01, 0x08] => self.op_fx18(x),
+            [0x0f, _, 0x01, 0x0e] => self.op_fx1e(x),
+            [0x0f, _, 0x02, 0x09] => self.op_fx29(x),
+            [0x0f, _, 0x03, 0x03] => self.op_fx33(x),
+            [0x0f, _, 0x05, 0x05] => self.op_fx55(x),
+            [0x0f, _, 0x06, 0x05] => self.op_fx65(x),
+            _ => self.update_pc(PCUpdate::Next),
         }
     }
 }
@@ -257,17 +277,15 @@ impl Interpreter {
 // -----------------------------------------------------------------------------
 impl Interpreter {
     /// Clear the interpreter memory starting at `0x200`.
-    pub fn clear_rom_memory(&mut self) {
-        for addr in 0x200..MEMORY_SIZE {
-            self.memory[addr] = 0;
-        }
+    fn clear_rom_memory(&mut self) {
+        self.memory[0x200..].copy_from_slice(&[0u8; MEMORY_SIZE - 0x200]);
     }
 
     /// Returns the current instruction the `program_counter` is pointing
     /// at. This instruction consists of a single `u16` which is obtained by
     /// merging the `u8` located at the pointing address and the `u8` next to
     /// it.
-    pub fn current_opcode(&self) -> u16 {
+    fn current_opcode(&self) -> u16 {
         ((self.memory[self.program_counter] as u16) << 8)
             | (self.memory[self.program_counter + 1] as u16)
     }
@@ -312,9 +330,9 @@ impl Interpreter {
     /// The interpreter sets the program counter to the address at the top of
     /// the stack, then subtracts 1 from the stack pointer.
     fn op_00ee(&mut self) {
-        self.update_pc(PCUpdate::JumpTo(
-            self.stack[self.stack_pointer] as usize,
-        ));
+        // FIXME: thread 'main' panicked at 'index out of bounds: the len is 16 but the
+        // index is 16', src/interpreter.rs:311:41
+        self.update_pc(PCUpdate::JumpTo(self.stack[self.stack_pointer] as usize));
         self.stack_pointer -= 1;
     }
 
@@ -368,7 +386,7 @@ impl Interpreter {
 
     /// ADD Vx, byte: set `Vx = Vx + kk`.
     fn op_7xkk(&mut self, x: usize, kk: u8) {
-        self.vregister[x] += kk;
+        self.vregister[x] = self.vregister[x].wrapping_add(kk);
         self.update_pc(PCUpdate::Next);
     }
 
@@ -494,27 +512,26 @@ impl Interpreter {
     /// screen.
     fn op_dxyn(&mut self, x: usize, y: usize, n: usize) {
         for byte_idx in 0..n {
-            // Sprite byte to be inserted
+            // Sprite byte to be inserted.
             let sprite_byte = self.memory[self.index_register + byte_idx];
 
-            // Column the sprite byte is to be put
+            // Column the sprite byte is to be put, always wrapping the screen.
             let col = (self.vregister[y] as usize + byte_idx) % DISPLAY_HEIGHT;
 
             for bit_idx in 0..SPRITE_WIDTH_BITES {
-                // Row the sprite bit is to be put
-                let row =
-                    (self.vregister[x] as usize + bit_idx) & DISPLAY_WIDTH;
+                // Row the sprite bit is to be put, always wrapping the screen.
+                let row = (self.vregister[x] as usize + bit_idx) % DISPLAY_WIDTH;
 
-                // Currently displayed bit in the screen at the location
+                // Currently displayed bit in the screen at the location.
                 let current_bit = self.display[col][row];
 
-                // Sprite bit to be inserted
+                // Sprite bit to be inserted.
                 let sprite_bit = (sprite_byte >> bit_idx) & 0x1;
 
-                // Check for collision
+                // Check for collision.
                 self.up_flag_if(sprite_bit == 1 && current_bit == 1);
 
-                // Puts the sprite into the screen
+                // Puts the sprite into the screen.
                 self.display[col][row] ^= sprite_bit;
             }
         }
@@ -559,7 +576,11 @@ impl Interpreter {
     /// All execution stops until a key is pressed, then the value of that key
     /// is stored in Vx.
     fn op_fx0a(&mut self, x: usize) {
-        self.vregister[x] = self.kbd_handler.wait_valid_key(x);
+        eprintln!("HERE WE ARE BITCHES");
+        match self.keypad.iter().position(|&b| b) {
+            Some(key_idx) => self.vregister[x] = key_idx as u8,
+            None => self.kbd_handler.wait_for_key(x),
+        }
         self.update_pc(PCUpdate::Next);
     }
 
@@ -625,9 +646,52 @@ impl Interpreter {
     /// The interpreter reads values from memory starting at location I into
     /// registers V0 through Vx.
     fn op_fx65(&mut self, x: usize) {
-        self.vregister[..x].copy_from_slice(
-            &self.memory[self.index_register..(self.index_register + x)],
-        );
+        self.vregister[..x]
+            .copy_from_slice(&self.memory[self.index_register..(self.index_register + x)]);
         self.update_pc(PCUpdate::Next);
+    }
+}
+
+// NOTE: This is temporary code and should be only used for purposes of
+// debugging.
+impl Interpreter {
+    pub fn manually_press_key(&mut self, key: u8) {
+        self.keypad[key as usize] = true;
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::{graphics::SCALE_FACTOR, rom::Rom};
+    extern crate sdl2;
+
+    fn simulate_initiation_of_environment(r: Rom) -> Interpreter {
+        let sdl_context = sdl2::init().unwrap();
+        let video_subsystem = sdl_context.video().unwrap();
+        let window = video_subsystem
+            .window(
+                "CHIP-8",
+                SCALE_FACTOR * DISPLAY_WIDTH as u32,
+                SCALE_FACTOR * DISPLAY_HEIGHT as u32,
+            )
+            .position_centered()
+            .build()
+            .unwrap();
+        let canvas = window.into_canvas().build().unwrap();
+        let rom = r;
+        let mut chip8 = Interpreter::new(&sdl_context, canvas);
+        chip8.load_rom(rom);
+        chip8
+    }
+
+    #[test]
+    fn op_fx0a_wait_for_a_keyboard_input() {
+        let test_rom = Rom::from_slice(&[0u8; 3584]);
+        let mut chip8 = simulate_initiation_of_environment(test_rom);
+        chip8.execute(0xf40a);
+        assert_eq!(chip8.kbd_handler.is_waiting(), Some(4));
+        assert_eq!(chip8.keypad, [false; 16]);
+        chip8.manually_press_key(6u8);
     }
 }

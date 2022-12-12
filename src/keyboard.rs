@@ -1,11 +1,8 @@
 extern crate sdl2;
-use crate::interpreter::Interpreter;
+use sdl2::{event::Event, keyboard::Keycode, EventPump, Sdl};
 
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
-use sdl2::{EventPump, Sdl};
-
-fn translate_key(key: &Keycode) -> Option<u8> {
+fn keycode_to_index(key: &Keycode) -> Option<u8> {
+    eprintln!("{key:?}");
     match key {
         Keycode::Num1 => Some(0x0),
         Keycode::Num2 => Some(0x1),
@@ -29,9 +26,6 @@ fn translate_key(key: &Keycode) -> Option<u8> {
 
 #[derive(Clone, Copy)]
 pub enum KbdHandlerState {
-    /// The `KbdHandler` is waiting for a key press. When the key event
-    /// happens, the handler should insert the key into the `vregister` of
-    /// the `Interpreter` at the wrapped usize.
     Waiting(usize),
     Free,
 }
@@ -50,46 +44,68 @@ impl KbdHandler {
         }
     }
 
-    /// Getter method for the state of the keyboard handler.
+    fn get_keycodes(&self) -> Vec<Keycode> {
+        self.event_pump
+            .keyboard_state()
+            .pressed_scancodes()
+            .filter_map(Keycode::from_scancode)
+            .collect()
+    }
+
+    /// Check for keypad input and return the `keypad` state. Returns the new
+    /// state of the keypad `Ok([bool; 16])` or an `Err(())`, indicating that
+    /// the user demands the program to stop.
+    pub fn poll_keypad(&mut self) -> Result<[bool; 16], ()> {
+        // TODO: This is not a good behaviour, it would be nicer if we could merge the
+        // look for keys with this first for loop through the events.
+        for event in self.event_pump.poll_iter() {
+            match event {
+                // Either a quit event or pressing escape should immediatly stop the program from
+                // running.
+                Event::Quit { .. }
+                | Event::KeyDown {
+                    keycode: Some(Keycode::Escape),
+                    ..
+                } => return Err(()),
+                // TODO: maybe we could insert the check for the valid keys here.
+                _ => {}
+            }
+        }
+
+        // Update the keypad state.
+        let mut new_keypad = [false; 16];
+        let keys = self.get_keycodes();
+        for k in keys.iter() {
+            if let Some(key_idx) = keycode_to_index(k) {
+                // Register the key into the keypad.
+                new_keypad[key_idx as usize] = true;
+                eprintln!("{new_keypad:?}");
+            }
+        }
+        Ok(new_keypad)
+    }
+
+    /// All execution stops util a valid key event is observed.
+    pub fn wait_for_key(&mut self, x: usize) {
+        self.state = KbdHandlerState::Waiting(x);
+    }
+
+    /// Get the current state of the handler.
     pub fn state(&self) -> KbdHandlerState {
         self.state
     }
 
-    /// Check for keypad input and return the `keypad` state.
-    pub fn poll_keypad(&self) -> [bool; 16] {
-        let keys: Vec<Keycode> = self
-            .event_pump
-            .keyboard_state()
-            .pressed_scancodes()
-            .filter_map(Keycode::from_scancode)
-            .collect();
-
-        // Updates the keypad state
-        let mut keypad = [false; 16];
-        for k in keys.iter() {
-            if let Some(idx) = translate_key(k) {
-                keypad[idx as usize] = true;
-            }
-        }
-        keypad
+    /// Set the handler to a free state.
+    pub fn free(&mut self) {
+        self.state = KbdHandlerState::Free;
     }
 
-    /// All execution stops util a valid key event is observed.
-    pub fn wait_valid_key(&mut self, x: usize) -> u8 {
-        loop {
-            match self.event_pump.wait_event() {
-                Event::KeyDown {
-                    keycode: Some(key), ..
-                } => {
-                    // If the key is valid, return.
-                    // Otherwise continue waiting for a valid key press.
-                    if let Some(key_idx) = translate_key(&key) {
-                        return key_idx;
-                    }
-                    continue;
-                }
-                _ => continue,
-            }
+    // NOTE: the purpose of this code is solely for debugging and should be later
+    // deleted.
+    pub fn is_waiting(&self) -> Option<usize> {
+        match self.state {
+            KbdHandlerState::Waiting(x) => Some(x),
+            KbdHandlerState::Free => None,
         }
     }
 }
