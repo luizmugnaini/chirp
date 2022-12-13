@@ -1,4 +1,4 @@
-# `chirp` 🐣  (🚧 WIP 🚧)
+# `chirp` 🐣
 
 This is a simple [CHIP-8](https://en.wikipedia.org/wiki/CHIP-8) interpreter I
 built with the intention of learning the the ways of hardware emulation
