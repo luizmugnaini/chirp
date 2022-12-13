@@ -187,10 +187,8 @@ impl Interpreter {
     pub fn run(&mut self) {
         'running: loop {
             // Setup the display.
-            // if self.display_handler.is_draw_flag_up() {
             self.display_handler.draw_to_canvas(&self.display);
             self.display_handler.show();
-            // }
 
             'waiting_kbd_input: loop {
                 match self.kbd_handler.poll_keypad() {
