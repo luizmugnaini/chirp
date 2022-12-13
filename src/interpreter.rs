@@ -7,7 +7,7 @@ use crate::{
 };
 
 extern crate sdl2;
-use sdl2::{render::Canvas, video::Window, Sdl};
+use sdl2::Sdl;
 
 extern crate rand;
 use rand::Rng;
@@ -48,6 +48,17 @@ pub const DISPLAY_WIDTH: usize = 64;
 /// Original CHIP-8 screen height available for display.
 pub const DISPLAY_HEIGHT: usize = 32;
 
+/// Every intruction (opcode) has a length of 2.
+pub const OPCODE_SIZE: usize = 2;
+
+/// The initial point in memory where the program counter should be set to when
+/// initializing the game. This coincides with the starting point of the ROM
+/// data stored in the memory.
+pub const INITIAL_POINT: usize = 0x200;
+
+/// Index of the flag located at the V register.
+pub const FLAG: usize = 0xf;
+
 /// Types of possible actions with the program counter after opcode execution.
 enum PCUpdate {
     /// Update the program counter to the next opcode in memory, that is,
@@ -55,7 +66,7 @@ enum PCUpdate {
     Next,
 
     /// The update should move the program counter so that it skips the next
-    /// opcode in memory. For that, we increment the program counter by 4.
+    /// opcode in memory. For tha)t, we increment the program counter by 4.
     SkipNext,
 
     /// Given an adress (specified by the opcode), assign the program counter
@@ -65,7 +76,8 @@ enum PCUpdate {
 
 pub struct Interpreter {
     /// CHIP-8 has a total of 4KB of RAM. The interpreter memory is located
-    /// below `0x200` while the ROM memory is anything from `0x200`.
+    /// below `0x200` while the ROM memory is anything starting at `0x200`. The
+    /// fonts are stored from adress 0 to 80.
     memory: [u8; MEMORY_SIZE],
 
     /// The `program_counter` (also referred to as "PC") points at the current
@@ -80,10 +92,10 @@ pub struct Interpreter {
     /// location in memory.
     index_register: usize,
 
-    /// The `vregister` array accounts for the values of the Vx registers,
-    /// where x is a hexadecimal ranging from 0 to F. The VF register should
-    /// not be touched by any program, its purpose is to serve as a flag for
-    /// the interpreter.
+    /// The `vregister` array accounts for the values of the V registers. These
+    /// registers are indexed by a hexadecimal ranging from `0x0` to `0xf`.
+    /// The V register with index `0xf` should not be touched by any program,
+    /// its purpose is to serve as a flag for the interpreter.
     vregister: [u8; 16],
 
     /// The `stack` is used to call subroutines and return from them. CHIP-8
@@ -101,23 +113,28 @@ pub struct Interpreter {
     /// value is positive, the computer should produce a "beep" sound.
     sound_timer: u8,
 
-    /// The keypad register the state of the currently pressed keys, its
-    /// values are
+    /// The keypad registers the state of the currently pressed keys:
+    /// - `true` indicates that the key is pressed.
+    /// - `false` otherwise.
+    /// There are 16 valid keyboard keys, those are (in the same order as
+    /// indexed in `keypad`):
     /// ```
-    /// 1 2 3 4
-    /// q w e r
-    /// a s d f
-    /// z x c v
+    /// ["1", "2", "3", "4",
+    ///  "q", "w", "e", "r",
+    ///  "a", "s", "d", "f",
+    ///  "z", "x", "c", "v"]
     /// ```
     keypad: [bool; 16],
 
-    /// Display screen containing the fonts
+    /// Display screen containing the fonts to be drawn by the
+    /// `display_handler`.
     display: [[u8; DISPLAY_WIDTH]; DISPLAY_HEIGHT],
 
-    /// Interpreter handler for keyboard input.
+    /// Keyboard handler that deals with the received keyboard input form the
+    /// user.
     kbd_handler: KbdHandler,
 
-    /// Interpreter display handler.
+    /// Display handler for dealing with the graphical output to the user.
     display_handler: DisplayHandler,
 }
 
@@ -126,14 +143,15 @@ pub struct Interpreter {
 // -----------------------------------------------------------------------------
 impl Interpreter {
     /// Creates a new CHIP-8 intepreter
-    pub fn new(contex: &Sdl, canvas: Canvas<Window>) -> Self {
+    pub fn new(context: Sdl, rom_file_path: &str) -> Self {
         // Load font set to memory
         let mut memory = [0u8; MEMORY_SIZE];
-        memory[..80].copy_from_slice(&FONTS[..80]);
+        memory[..80].copy_from_slice(&FONTS[..]);
 
-        Interpreter {
+        let rom = Rom::new(rom_file_path);
+        let mut chip8 = Interpreter {
             memory,
-            program_counter: 0x200,
+            program_counter: INITIAL_POINT,
             index_register: 0,
             stack_pointer: 0,
             stack: [0; 16],
@@ -142,9 +160,11 @@ impl Interpreter {
             sound_timer: 0,
             keypad: [false; 16],
             display: [[0u8; DISPLAY_WIDTH]; DISPLAY_HEIGHT],
-            kbd_handler: KbdHandler::new(contex),
-            display_handler: DisplayHandler::new(canvas),
-        }
+            kbd_handler: KbdHandler::new(&context),
+            display_handler: DisplayHandler::new(&context, rom_file_path),
+        };
+        chip8.load_rom(rom);
+        chip8
     }
 
     /// Writes ROM data to the memory starting at `0x200` address.
@@ -152,10 +172,10 @@ impl Interpreter {
         // Check if the program counter is set to the initial address,
         // otherwise the memory can be already in used by a different
         // ROM.
-        if self.program_counter != 0x200 {
+        if self.program_counter != INITIAL_POINT {
             self.clear_rom_memory();
         }
-        self.memory[0x200..].copy_from_slice(&rom.get_data());
+        self.memory[INITIAL_POINT..].copy_from_slice(&rom.get_data());
     }
 }
 
@@ -167,11 +187,12 @@ impl Interpreter {
     pub fn run(&mut self) {
         'running: loop {
             // Setup the display.
+            // if self.display_handler.is_draw_flag_up() {
             self.display_handler.draw_to_canvas(&self.display);
             self.display_handler.show();
+            // }
 
             'waiting_kbd_input: loop {
-                eprintln!("Waiting for key");
                 match self.kbd_handler.poll_keypad() {
                     Ok(k) => self.keypad = k,
                     Err(()) => break 'running,
@@ -183,13 +204,14 @@ impl Interpreter {
                         // value into the regiter Vx.
                         if let Some(key_idx) = self.keypad.iter().position(|&b| b) {
                             self.vregister[x] = key_idx as u8;
+                            self.kbd_handler.free();
                             break 'waiting_kbd_input;
                         }
                     }
                     KbdHandlerState::Free => break 'waiting_kbd_input,
                 }
             }
-            eprintln!("executing");
+
             self.execute(self.current_opcode());
 
             // Handling timers.
@@ -201,9 +223,8 @@ impl Interpreter {
                 self.sound_timer -= 1;
             }
 
-            thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
+            thread::sleep(Duration::from_millis(2));
         }
-        eprintln!("Stopping execution");
     }
 
     /// Given an `upcode`, the interpreter executes a single cycle of the
@@ -248,9 +269,9 @@ impl Interpreter {
             [0x08, _, _, 0x03] => self.op_8xy3(x, y),
             [0x08, _, _, 0x04] => self.op_8xy4(x, y),
             [0x08, _, _, 0x05] => self.op_8xy5(x, y),
-            [0x08, _, _, 0x06] => self.op_8xy6(x, y),
+            [0x08, _, _, 0x06] => self.op_8xy6(x),
             [0x08, _, _, 0x07] => self.op_8xy7(x, y),
-            [0x08, _, _, 0x0e] => self.op_8xye(x, y),
+            [0x08, _, _, 0x0e] => self.op_8xye(x),
             [0x09, _, _, 0x00] => self.op_9xy0(x, y),
             [0x0a, _, _, _] => self.op_annn(nnn),
             [0x0b, _, _, _] => self.op_bnnn(nnn),
@@ -278,7 +299,7 @@ impl Interpreter {
 impl Interpreter {
     /// Clear the interpreter memory starting at `0x200`.
     fn clear_rom_memory(&mut self) {
-        self.memory[0x200..].copy_from_slice(&[0u8; MEMORY_SIZE - 0x200]);
+        self.memory[INITIAL_POINT..].copy_from_slice(&[0u8; MEMORY_SIZE - INITIAL_POINT]);
     }
 
     /// Returns the current instruction the `program_counter` is pointing
@@ -294,8 +315,8 @@ impl Interpreter {
     /// `PCUpdate`.
     fn update_pc(&mut self, updater: PCUpdate) {
         match updater {
-            PCUpdate::Next => self.program_counter += 2,
-            PCUpdate::SkipNext => self.program_counter += 4,
+            PCUpdate::Next => self.program_counter += OPCODE_SIZE,
+            PCUpdate::SkipNext => self.program_counter += 2 * OPCODE_SIZE,
             PCUpdate::JumpTo(addr) => self.program_counter = addr,
         }
     }
@@ -303,11 +324,14 @@ impl Interpreter {
     /// If the `condition` passes, sets the flag `vregister[0xf]` to `1`,
     /// otherwise the flag is set to `0`.
     fn up_flag_if(&mut self, condition: bool) {
-        if condition {
-            self.vregister[0xf] = 1;
-        } else {
-            self.vregister[0xf] = 0;
+        self.vregister[FLAG] = if condition { 1 } else { 0 };
+    }
+
+    fn is_flag_up(&self) -> bool {
+        if self.vregister[FLAG] != 0 {
+            return true;
         }
+        false
     }
 
     /// Erases all pixels from the display screen, set all to zero.
@@ -327,13 +351,11 @@ impl Interpreter {
 
     /// RET: return from a subroutine.
     ///
-    /// The interpreter sets the program counter to the address at the top of
-    /// the stack, then subtracts 1 from the stack pointer.
+    /// Subtract 1 from the stack pointer and jump the program counter to the
+    /// position of the stack at the stack pointer.
     fn op_00ee(&mut self) {
-        // FIXME: thread 'main' panicked at 'index out of bounds: the len is 16 but the
-        // index is 16', src/interpreter.rs:311:41
-        self.update_pc(PCUpdate::JumpTo(self.stack[self.stack_pointer] as usize));
         self.stack_pointer -= 1;
+        self.update_pc(PCUpdate::JumpTo(self.stack[self.stack_pointer] as usize));
     }
 
     /// JP addr: jump to location `nnn`.
@@ -343,10 +365,10 @@ impl Interpreter {
 
     /// CALL addr: call subroutine at `nnn`.
     ///
-    /// The interpreter increments the stack pointer, then puts the current PC
-    /// on the top of the stack. The PC is then set to nnn.
+    /// The interpreter puts the program counter (in the next state) on the top
+    /// of the stack and then sets the program counter to `nnn`.
     fn op_2nnn(&mut self, nnn: usize) {
-        self.stack[self.stack_pointer] = self.program_counter as u16;
+        self.stack[self.stack_pointer] = (self.program_counter + 2) as u16;
         self.stack_pointer += 1;
         self.update_pc(PCUpdate::JumpTo(nnn));
     }
@@ -437,11 +459,11 @@ impl Interpreter {
         self.update_pc(PCUpdate::Next);
     }
 
-    /// SHR Vx {, Vy}:
+    /// SHR Vx
     ///
     /// If the least-significant bit of Vx is 1, then VF is set to 1, otherwise
     /// 0. Then Vx is divided by 2.
-    fn op_8xy6(&mut self, x: usize, _y: usize) {
+    fn op_8xy6(&mut self, x: usize) {
         self.up_flag_if((self.vregister[x] & 1) == 1);
         self.vregister[x] >>= 1;
         self.update_pc(PCUpdate::Next);
@@ -458,11 +480,11 @@ impl Interpreter {
         self.update_pc(PCUpdate::Next);
     }
 
-    /// SHL Vx {, Vy}:
+    /// SHL Vx:
     ///
     /// If the most-significant bit of Vx is 1, then VF is set to 1, otherwise
     /// to 0. Then Vx is multiplied by 2.
-    fn op_8xye(&mut self, x: usize, _y: usize) {
+    fn op_8xye(&mut self, x: usize) {
         self.up_flag_if((self.vregister[x] >> 7) & 1 == 1);
         self.vregister[x] <<= 1;
         self.update_pc(PCUpdate::Next);
@@ -477,7 +499,7 @@ impl Interpreter {
         }
     }
 
-    /// LD I, addr: set I = nnn (I is the index register).
+    /// LD I, addr: set I = nnn.
     fn op_annn(&mut self, nnn: usize) {
         self.index_register = nnn;
         self.update_pc(PCUpdate::Next);
@@ -511,6 +533,8 @@ impl Interpreter {
     /// coordinates of the display, it wraps around to the opposite side of the
     /// screen.
     fn op_dxyn(&mut self, x: usize, y: usize, n: usize) {
+        // Ensure the flag is down for the initial state of the collision checking.
+        self.vregister[FLAG] = 0;
         for byte_idx in 0..n {
             // Sprite byte to be inserted.
             let sprite_byte = self.memory[self.index_register + byte_idx];
@@ -522,19 +546,21 @@ impl Interpreter {
                 // Row the sprite bit is to be put, always wrapping the screen.
                 let row = (self.vregister[x] as usize + bit_idx) % DISPLAY_WIDTH;
 
-                // Currently displayed bit in the screen at the location.
                 let current_bit = self.display[col][row];
+                let sprite_bit = (sprite_byte >> (7 - bit_idx)) & 0x1;
 
-                // Sprite bit to be inserted.
-                let sprite_bit = (sprite_byte >> bit_idx) & 0x1;
-
-                // Check for collision.
-                self.up_flag_if(sprite_bit == 1 && current_bit == 1);
+                // Check for collision only if the flag is down.
+                if !self.is_flag_up() {
+                    self.up_flag_if(sprite_bit == 1 && current_bit == 1);
+                }
 
                 // Puts the sprite into the screen.
                 self.display[col][row] ^= sprite_bit;
             }
         }
+        // Since the display changed in memory, the handler should draw to the screen
+        // in the next cycle.
+        self.display_handler.up_draw_flag();
         self.update_pc(PCUpdate::Next);
     }
 
@@ -576,11 +602,7 @@ impl Interpreter {
     /// All execution stops until a key is pressed, then the value of that key
     /// is stored in Vx.
     fn op_fx0a(&mut self, x: usize) {
-        eprintln!("HERE WE ARE BITCHES");
-        match self.keypad.iter().position(|&b| b) {
-            Some(key_idx) => self.vregister[x] = key_idx as u8,
-            None => self.kbd_handler.wait_for_key(x),
-        }
+        self.kbd_handler.wait_for_key(x);
         self.update_pc(PCUpdate::Next);
     }
 
@@ -597,13 +619,8 @@ impl Interpreter {
     }
 
     /// ADD I, Vx: set I = I + Vx.
-    ///
-    /// If the sum I + Vx exceeds `0xfff` then the flag is set to `1`,
-    /// otherwise `0`.
     fn op_fx1e(&mut self, x: usize) {
-        let sum = self.index_register + self.vregister[x] as usize;
-        self.up_flag_if(sum > 0xfff);
-        self.index_register = sum;
+        self.index_register += self.vregister[x] as usize;
         self.update_pc(PCUpdate::Next);
     }
 
@@ -625,7 +642,7 @@ impl Interpreter {
     fn op_fx33(&mut self, x: usize) {
         self.memory[self.index_register] = self.vregister[x] / 100;
         self.memory[self.index_register + 1] = (self.vregister[x] % 100) / 10;
-        self.memory[self.index_register + 1] = self.vregister[x] % 10;
+        self.memory[self.index_register + 2] = self.vregister[x] % 10;
         self.update_pc(PCUpdate::Next);
     }
 
@@ -635,8 +652,8 @@ impl Interpreter {
     /// The interpreter copies the values of registers V0 through Vx into
     /// memory, starting at the address in I.
     fn op_fx55(&mut self, x: usize) {
-        self.memory[self.index_register..(self.index_register + x)]
-            .copy_from_slice(&self.vregister[..x]);
+        self.memory[self.index_register..=(self.index_register + x)]
+            .copy_from_slice(&self.vregister[0..=x]);
         self.update_pc(PCUpdate::Next);
     }
 
@@ -646,52 +663,8 @@ impl Interpreter {
     /// The interpreter reads values from memory starting at location I into
     /// registers V0 through Vx.
     fn op_fx65(&mut self, x: usize) {
-        self.vregister[..x]
-            .copy_from_slice(&self.memory[self.index_register..(self.index_register + x)]);
+        self.vregister[0..=x]
+            .copy_from_slice(&self.memory[self.index_register..=(self.index_register + x)]);
         self.update_pc(PCUpdate::Next);
-    }
-}
-
-// NOTE: This is temporary code and should be only used for purposes of
-// debugging.
-impl Interpreter {
-    pub fn manually_press_key(&mut self, key: u8) {
-        self.keypad[key as usize] = true;
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use crate::{graphics::SCALE_FACTOR, rom::Rom};
-    extern crate sdl2;
-
-    fn simulate_initiation_of_environment(r: Rom) -> Interpreter {
-        let sdl_context = sdl2::init().unwrap();
-        let video_subsystem = sdl_context.video().unwrap();
-        let window = video_subsystem
-            .window(
-                "CHIP-8",
-                SCALE_FACTOR * DISPLAY_WIDTH as u32,
-                SCALE_FACTOR * DISPLAY_HEIGHT as u32,
-            )
-            .position_centered()
-            .build()
-            .unwrap();
-        let canvas = window.into_canvas().build().unwrap();
-        let rom = r;
-        let mut chip8 = Interpreter::new(&sdl_context, canvas);
-        chip8.load_rom(rom);
-        chip8
-    }
-
-    #[test]
-    fn op_fx0a_wait_for_a_keyboard_input() {
-        let test_rom = Rom::from_slice(&[0u8; 3584]);
-        let mut chip8 = simulate_initiation_of_environment(test_rom);
-        chip8.execute(0xf40a);
-        assert_eq!(chip8.kbd_handler.is_waiting(), Some(4));
-        assert_eq!(chip8.keypad, [false; 16]);
-        chip8.manually_press_key(6u8);
     }
 }

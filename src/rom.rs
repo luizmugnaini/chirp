@@ -8,12 +8,6 @@ pub struct Rom {
     /// CHIP-8 is 4KB (`4096`) but `0x200` (`512`) bites are reserved to the
     /// interpreter, lefting the game with an available space of `3584`
     mem: [u8; ROM_MEM_SIZE],
-
-    // NOTE: This is maybe not needed and can be discarted.
-    /// Stores the ROM size. This is done in order to prevent the interpreter
-    /// from reading unwanted memory that may have been left by previous roms
-    /// that wheren't cleaned from memory.
-    size: usize,
 }
 
 impl Rom {
@@ -26,28 +20,13 @@ impl Rom {
         match raw_rom.read(&mut mem) {
             Err(e) => panic!("Could not read ROM file: {e}"),
             Ok(0) => panic!("ROM file is empty!"),
-            Ok(size) => Rom { mem, size },
+            Ok(_) => Rom { mem },
         }
     }
 
     /// Returns the stored memory of the ROM.
     pub fn get_data(&self) -> [u8; ROM_MEM_SIZE] {
         self.mem
-    }
-
-    /// Returns the size of the stored ROM.
-    pub fn size(&self) -> usize {
-        self.size
-    }
-
-    // NOTE: temporary code for debugging.
-    pub fn from_slice(rom: &[u8]) -> Self {
-        let mut mem = [0u8; ROM_MEM_SIZE];
-        mem.copy_from_slice(rom);
-        Rom {
-            mem,
-            size: rom.len(),
-        }
     }
 }
 
@@ -74,7 +53,6 @@ mod test {
         let rom = Rom::new("games/PONG");
         let rom_mem = rom.get_data();
 
-        assert_eq!(rom.size(), 246);
         for addr in 0..123 {
             let x = rom_pong_data[addr];
             // Check upper byte
