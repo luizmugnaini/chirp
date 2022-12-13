@@ -2,6 +2,7 @@ mod graphics;
 mod interpreter;
 mod keyboard;
 mod rom;
+mod sound;
 
 use crate::interpreter::Interpreter;
 use std::env;

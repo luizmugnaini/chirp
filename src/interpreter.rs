@@ -1,9 +1,10 @@
-use std::{thread, time::Duration};
+use std::{cmp::Ordering, thread, time::Duration};
 
 use crate::{
     graphics::DisplayHandler,
     keyboard::{KbdHandler, KbdHandlerState},
     rom::Rom,
+    sound::AudioHandler,
 };
 
 extern crate sdl2;
@@ -135,6 +136,9 @@ pub struct Interpreter {
 
     /// Display handler for dealing with the graphical output to the user.
     display_handler: DisplayHandler,
+
+    /// Audio handler. Produces a beeping sound.
+    audio_handler: AudioHandler,
 }
 
 // -----------------------------------------------------------------------------
@@ -161,6 +165,7 @@ impl Interpreter {
             display: [[0u8; DISPLAY_WIDTH]; DISPLAY_HEIGHT],
             kbd_handler: KbdHandler::new(&sdl_context),
             display_handler: DisplayHandler::new(&sdl_context, rom_file_path),
+            audio_handler: AudioHandler::new(&sdl_context),
         };
         let rom = Rom::new(rom_file_path);
         chip8.load_rom(rom);
@@ -212,13 +217,17 @@ impl Interpreter {
 
             self.execute(self.current_opcode());
 
-            // Handling timers.
             if self.delay_timer > 0 {
                 self.delay_timer -= 1;
             }
-            if self.sound_timer > 0 {
-                // TODO: beep
-                self.sound_timer -= 1;
+
+            match self.sound_timer.cmp(&0) {
+                Ordering::Greater => {
+                    self.audio_handler.start_beep();
+                    self.sound_timer -= 1;
+                }
+                Ordering::Equal => self.audio_handler.stop_beep(),
+                _ => {}
             }
 
             thread::sleep(Duration::from_millis(2));
