@@ -254,7 +254,7 @@ impl Interpreter {
         let n = opcode_nibbles[3] as usize;
 
         match opcode_nibbles {
-            [0x00, 0x00, 0x0e, 0x00] => dbg!(self.op_00e0()),
+            [0x00, 0x00, 0x0e, 0x00] => self.op_00e0(),
             [0x00, 0x00, 0x0e, 0x0e] => self.op_00ee(),
             [0x01, _, _, _] => self.op_1nnn(nnn),
             [0x02, _, _, _] => self.op_2nnn(nnn),
