@@ -7,7 +7,6 @@ use crate::{
 };
 
 extern crate sdl2;
-use sdl2::Sdl;
 
 extern crate rand;
 use rand::Rng;
@@ -143,12 +142,12 @@ pub struct Interpreter {
 // -----------------------------------------------------------------------------
 impl Interpreter {
     /// Creates a new CHIP-8 intepreter
-    pub fn new(context: Sdl, rom_file_path: &str) -> Self {
+    pub fn new(rom_file_path: &str) -> Self {
         // Load font set to memory
         let mut memory = [0u8; MEMORY_SIZE];
         memory[..80].copy_from_slice(&FONTS[..]);
 
-        let rom = Rom::new(rom_file_path);
+        let sdl_context = sdl2::init().unwrap();
         let mut chip8 = Interpreter {
             memory,
             program_counter: INITIAL_POINT,
@@ -160,9 +159,10 @@ impl Interpreter {
             sound_timer: 0,
             keypad: [false; 16],
             display: [[0u8; DISPLAY_WIDTH]; DISPLAY_HEIGHT],
-            kbd_handler: KbdHandler::new(&context),
-            display_handler: DisplayHandler::new(&context, rom_file_path),
+            kbd_handler: KbdHandler::new(&sdl_context),
+            display_handler: DisplayHandler::new(&sdl_context, rom_file_path),
         };
+        let rom = Rom::new(rom_file_path);
         chip8.load_rom(rom);
         chip8
     }
@@ -254,7 +254,7 @@ impl Interpreter {
         let n = opcode_nibbles[3] as usize;
 
         match opcode_nibbles {
-            [0x00, 0x00, 0x0e, 0x00] => self.op_00e0(),
+            [0x00, 0x00, 0x0e, 0x00] => dbg!(self.op_00e0()),
             [0x00, 0x00, 0x0e, 0x0e] => self.op_00ee(),
             [0x01, _, _, _] => self.op_1nnn(nnn),
             [0x02, _, _, _] => self.op_2nnn(nnn),
@@ -347,6 +347,7 @@ impl Interpreter {
     /// CLS: clear the display.
     fn op_00e0(&mut self) {
         self.clear_display();
+        self.update_pc(PCUpdate::Next);
     }
 
     /// RET: return from a subroutine.
