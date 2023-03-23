@@ -4,6 +4,8 @@ This is a simple [CHIP-8](https://en.wikipedia.org/wiki/CHIP-8) interpreter I
 built with the intention of learning the the ways of hardware emulation
 (although CHIP-8 is merely an interpreter, not a piece of hardware).
 
+![Maze](/maze.png "Interpreter running the 'Maze' game")
+
 # Dependencies
 
 The display of the interpreter depends on SDL, so you may have to install
@@ -20,6 +22,8 @@ of them, you can simply run
 cargo run games/name_of_the_game
 ```
 You can also provide the path of another game you may have downloaded.
+
+![Invaders](/invaders.png "Interpreter running the 'Space Invaders' game")
 
 # References
 
