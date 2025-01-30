@@ -1,3 +1,10 @@
+# DISCLAIMER
+
+> This project is now hosted at https://git.sr.ht/~presheaf/chirp
+>
+> This repository will no longer be updated. Please refer to the new hosting
+> page for new development and contributions or contact me via e-mail.
+
 # `chirp` 🐣
 
 This is a simple [CHIP-8](https://en.wikipedia.org/wiki/CHIP-8) interpreter I
